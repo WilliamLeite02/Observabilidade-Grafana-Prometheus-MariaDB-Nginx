@@ -1,0 +1,82 @@
+version: '3.9'
+
+services:
+  # --- Serviços Antigos (Prometheus e Grafana) ---
+  nginx:
+    image: nginx:alpine
+    container_name: obs-nginx
+    ports:
+      - "3300:443" # Mapeia a porta 3300 da AWS para a 443 do Nginx
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx/certs:/etc/nginx/certs
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd
+    depends_on:
+      - grafana
+      - prometheus
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: obs-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      - mariadb-exporter
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: obs-grafana
+    user: "472"
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SERVER_ROOT_URL=https://localhost:3300/
+  # --- NOVOS SERVIÇOS ---
+
+  # 1. Banco de Dados
+  mariadb:
+    image: mariadb:10.11
+    container_name: obs-mariadb
+    environment:
+      - MARIADB_ROOT_PASSWORD=william
+      - MARIADB_DATABASE=william
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    # Não expomos a porta 3306 para fora da AWS por segurança, 
+    # acesso apenas interno entre containers.
+
+  # 2. Exporter (Coleta métricas do MariaDB e expõe para o Prometheus)
+  mariadb-exporter:
+    image: prom/mysqld-exporter
+    container_name: obs-mariadb-exporter
+    volumes:
+      # Formato: user:password@(hostname:3306)/
+      - ./exporter/my.cnf:/.my.cnf
+    depends_on:
+      - mariadb
+
+  # 3. Gerador de Carga (Nosso Python Script)
+  load-generator:
+    build: ./load-generator
+    container_name: obs-load-generator
+    environment:
+      - DB_HOST=mariadb
+      - DB_USER=root
+      - DB_PASSWORD=william
+      - DB_NAME=william
+    depends_on:
+      - mariadb
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  mariadb-data:
